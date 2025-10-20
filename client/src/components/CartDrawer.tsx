@@ -4,20 +4,20 @@ import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface CartItem {
-  id: number;
-  productId: number;
+  id: string;
+  productId: string;
   name: string;
-  price: number;
+  price: string;
   quantity: number;
-  image: string;
+  image?: string;
 }
 
 interface CartDrawerProps {
   isOpen: boolean;
   items: CartItem[];
   onClose: () => void;
-  onUpdateQuantity?: (id: number, quantity: number) => void;
-  onRemoveItem?: (id: number) => void;
+  onUpdateQuantity?: (id: string, quantity: number) => void;
+  onRemoveItem?: (id: string) => void;
   onCheckout?: () => void;
 }
 
@@ -29,7 +29,7 @@ export default function CartDrawer({
   onRemoveItem,
   onCheckout,
 }: CartDrawerProps) {
-  const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const subtotal = items.reduce((sum, item) => sum + parseFloat(item.price) * item.quantity, 0);
 
   if (!isOpen) return null;
 
@@ -68,14 +68,14 @@ export default function CartDrawer({
                   <Card key={item.id} className="p-3" data-testid={`cart-item-${item.id}`}>
                     <div className="flex gap-3">
                       <img
-                        src={item.image}
+                        src={item.image || "/placeholder.png"}
                         alt={item.name}
                         className="h-16 w-16 rounded-md object-cover"
                       />
                       
                       <div className="flex-1">
                         <h3 className="text-sm font-medium">{item.name}</h3>
-                        <p className="text-sm font-bold">${item.price.toFixed(2)}</p>
+                        <p className="text-sm font-bold">${parseFloat(item.price).toFixed(2)}</p>
                         
                         <div className="mt-2 flex items-center justify-between">
                           <div className="flex items-center rounded-md border">

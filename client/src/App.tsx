@@ -5,6 +5,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { CartProvider, useCart } from "@/lib/cart-context";
 import ThemeToggle from "@/components/ThemeToggle";
 import CartBadge from "@/components/CartBadge";
 import CartDrawer from "@/components/CartDrawer";
@@ -22,12 +23,7 @@ import { ShoppingBag, List, Package, LayoutDashboard, HelpCircle, Home as HomeIc
 function Navigation() {
   const [location] = useLocation();
   const [cartOpen, setCartOpen] = useState(false);
-
-  // TODO: remove mock functionality - cart items will come from cart state
-  const cartItems = [
-    { id: 1, productId: 1, name: "Organic Red Apples", price: 4.99, quantity: 2, image: "/placeholder.png" },
-    { id: 2, productId: 2, name: "Artisan Bread", price: 5.49, quantity: 1, image: "/placeholder.png" },
-  ];
+  const { items: cartItems, updateQuantity, removeItem } = useCart();
 
   const navItems = [
     { path: "/", label: "Home", icon: HomeIcon },
@@ -64,7 +60,7 @@ function Navigation() {
 
           <div className="flex items-center gap-2">
             <ThemeToggle />
-            <CartBadge itemCount={cartItems.length} onClick={() => setCartOpen(true)} />
+            <CartBadge itemCount={cartItems.reduce((sum, item) => sum + item.quantity, 0)} onClick={() => setCartOpen(true)} />
           </div>
         </div>
       </header>
@@ -94,8 +90,14 @@ function Navigation() {
         isOpen={cartOpen}
         items={cartItems}
         onClose={() => setCartOpen(false)}
-        onUpdateQuantity={(id, qty) => console.log(`Update ${id} to ${qty}`)}
-        onRemoveItem={(id) => console.log(`Remove ${id}`)}
+        onUpdateQuantity={(id, qty) => {
+          const item = cartItems.find(i => i.id === id);
+          if (item) updateQuantity(item.productId, qty);
+        }}
+        onRemoveItem={(id) => {
+          const item = cartItems.find(i => i.id === id);
+          if (item) removeItem(item.productId);
+        }}
         onCheckout={() => {
           setCartOpen(false);
           window.location.href = '/checkout';
@@ -125,15 +127,17 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
-        <TooltipProvider>
-          <div className="min-h-screen bg-background">
-            <Navigation />
-            <main className="container mx-auto px-4 py-8 pb-24 md:pb-8">
-              <Router />
-            </main>
-          </div>
-          <Toaster />
-        </TooltipProvider>
+        <CartProvider>
+          <TooltipProvider>
+            <div className="min-h-screen bg-background">
+              <Navigation />
+              <main className="container mx-auto px-4 py-8 pb-24 md:pb-8">
+                <Router />
+              </main>
+            </div>
+            <Toaster />
+          </TooltipProvider>
+        </CartProvider>
       </ThemeProvider>
     </QueryClientProvider>
   );

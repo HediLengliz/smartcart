@@ -14,6 +14,7 @@ import {
   generateVerificationCode,
   getVerificationExpiry,
 } from "./auth";
+import { sendVerificationEmail, sendPasswordResetEmail, sendOrderConfirmationEmail } from "./email";
 import { 
   insertListSchema, 
   insertListItemSchema,
@@ -31,7 +32,7 @@ if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error("Missing required Stripe secret: STRIPE_SECRET_KEY");
 }
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: "2023-10-16",
+  apiVersion: "2025-09-30.clover",
 });
 
 // Initialize OpenAI
@@ -68,7 +69,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const user = await createUser(name, email, password);
 
-      // TODO: Send verification email with code
+      // Send verification email with code
+      await sendVerificationEmail(email, user.verificationCode!, name);
       console.log(`Verification code for ${email}: ${user.verificationCode}`);
 
       res.json({ 
@@ -163,8 +165,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUserByEmail(email);
-      // TODO: Send reset code via email
-      console.log(`Reset code for ${email}: ${user?.resetCode}`);
+      if (user && user.resetCode) {
+        await sendPasswordResetEmail(email, user.resetCode, user.name);
+        console.log(`Reset code for ${email}: ${user.resetCode}`);
+      }
 
       res.json({ message: "If the email exists, a reset code has been sent" });
     } catch (error) {
@@ -552,6 +556,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
               stock: product.stock - parseInt(item.quantity),
             });
           }
+        }
+
+        // Send order confirmation email
+        const user = await storage.getUser(order.userId);
+        if (user) {
+          const total = parseFloat(payment.amount);
+          await sendOrderConfirmationEmail(
+            user.email,
+            user.name,
+            order.orderNumber,
+            orderItems,
+            total,
+            "completed"
+          );
         }
 
         res.json({ 

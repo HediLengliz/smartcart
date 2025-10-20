@@ -5,19 +5,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-type AuthMode = "login" | "signup" | "forgot-password" | "verify-email";
+type AuthMode = "login" | "signup" | "forgot-password" | "verify-email" | "reset-password";
 
 interface AuthFormProps {
   mode?: AuthMode;
   onSubmit?: (data: any) => void;
   onModeChange?: (mode: AuthMode) => void;
+  isLoading?: boolean;
+  savedEmail?: string;
 }
 
-export default function AuthForm({ mode = "login", onSubmit, onModeChange }: AuthFormProps) {
+export default function AuthForm({ mode = "login", onSubmit, onModeChange, isLoading = false, savedEmail = "" }: AuthFormProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
-    email: "",
+    email: savedEmail,
     password: "",
     verificationCode: "",
   });
@@ -33,6 +35,7 @@ export default function AuthForm({ mode = "login", onSubmit, onModeChange }: Aut
     signup: "Create Account",
     "forgot-password": "Reset Password",
     "verify-email": "Verify Email",
+    "reset-password": "Reset Password",
   };
 
   const descriptions = {
@@ -40,6 +43,7 @@ export default function AuthForm({ mode = "login", onSubmit, onModeChange }: Aut
     signup: "Start shopping smarter today",
     "forgot-password": "We'll send you a reset code",
     "verify-email": "Enter the code sent to your email",
+    "reset-password": "Enter your reset code and new password",
   };
 
   return (
@@ -68,7 +72,7 @@ export default function AuthForm({ mode = "login", onSubmit, onModeChange }: Aut
             </div>
           )}
 
-          {mode !== "verify-email" && (
+          {mode !== "verify-email" && mode !== "reset-password" && (
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
               <div className="relative">
@@ -81,12 +85,29 @@ export default function AuthForm({ mode = "login", onSubmit, onModeChange }: Aut
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                   data-testid="input-email"
+                  required
                 />
               </div>
             </div>
           )}
 
-          {(mode === "login" || mode === "signup") && (
+          {(mode === "verify-email" || mode === "reset-password") && (
+            <div className="space-y-2">
+              <Label htmlFor="code">Verification Code</Label>
+              <Input
+                id="code"
+                placeholder="123456"
+                className="text-center text-lg font-mono tracking-widest"
+                maxLength={6}
+                value={formData.verificationCode}
+                onChange={(e) => setFormData({ ...formData, verificationCode: e.target.value })}
+                data-testid="input-verification-code"
+                required
+              />
+            </div>
+          )}
+
+          {(mode === "login" || mode === "signup" || mode === "reset-password") && (
             <div className="space-y-2">
               <Label htmlFor="password">Password</Label>
               <div className="relative">
@@ -99,6 +120,7 @@ export default function AuthForm({ mode = "login", onSubmit, onModeChange }: Aut
                   value={formData.password}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                   data-testid="input-password"
+                  required
                 />
                 <button
                   type="button"
@@ -111,29 +133,19 @@ export default function AuthForm({ mode = "login", onSubmit, onModeChange }: Aut
               </div>
             </div>
           )}
-
-          {mode === "verify-email" && (
-            <div className="space-y-2">
-              <Label htmlFor="code">Verification Code</Label>
-              <Input
-                id="code"
-                placeholder="123456"
-                className="text-center text-lg font-mono tracking-widest"
-                maxLength={6}
-                value={formData.verificationCode}
-                onChange={(e) => setFormData({ ...formData, verificationCode: e.target.value })}
-                data-testid="input-verification-code"
-              />
-            </div>
-          )}
         </CardContent>
         
         <CardFooter className="flex flex-col gap-4">
-          <Button type="submit" className="w-full" data-testid="button-submit">
-            {mode === "login" && "Sign In"}
-            {mode === "signup" && "Create Account"}
-            {mode === "forgot-password" && "Send Reset Code"}
-            {mode === "verify-email" && "Verify Email"}
+          <Button type="submit" className="w-full" data-testid="button-submit" disabled={isLoading}>
+            {isLoading ? "Loading..." : (
+              <>
+                {mode === "login" && "Sign In"}
+                {mode === "signup" && "Create Account"}
+                {mode === "forgot-password" && "Send Reset Code"}
+                {mode === "verify-email" && "Verify Email"}
+                {mode === "reset-password" && "Reset Password"}
+              </>
+            )}
           </Button>
 
           <div className="flex w-full flex-col gap-2 text-center text-sm">
@@ -175,7 +187,7 @@ export default function AuthForm({ mode = "login", onSubmit, onModeChange }: Aut
               </div>
             )}
 
-            {mode === "forgot-password" && (
+            {(mode === "forgot-password" || mode === "verify-email" || mode === "reset-password") && (
               <button
                 type="button"
                 className="text-primary hover:underline"
@@ -183,16 +195,6 @@ export default function AuthForm({ mode = "login", onSubmit, onModeChange }: Aut
                 data-testid="link-back-to-login"
               >
                 Back to login
-              </button>
-            )}
-
-            {mode === "verify-email" && (
-              <button
-                type="button"
-                className="text-primary hover:underline"
-                data-testid="link-resend-code"
-              >
-                Resend code
               </button>
             )}
           </div>
