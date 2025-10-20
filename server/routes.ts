@@ -2,6 +2,9 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import "./types"; // Import session types
 import { storage } from "./storage";
+import { db } from "./db";
+import Stripe from "stripe";
+import OpenAI from "openai";
 import { 
   createUser, 
   verifyUser, 
@@ -19,8 +22,24 @@ import {
   insertOrderItemSchema,
   insertPaymentSchema,
   insertMessageSchema,
+  orderItems,
 } from "@shared/schema";
 import { z } from "zod";
+
+// Initialize Stripe
+if (!process.env.STRIPE_SECRET_KEY) {
+  throw new Error("Missing required Stripe secret: STRIPE_SECRET_KEY");
+}
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: "2023-10-16",
+});
+
+// Initialize OpenAI
+// the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
+if (!process.env.OPENAI_API_KEY) {
+  throw new Error("Missing required OpenAI secret: OPENAI_API_KEY");
+}
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Middleware to parse user from session
 function requireAuth(req: Request, res: Response, next: Function) {
@@ -460,10 +479,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ==================== PAYMENT ROUTES ====================
   
-  // Process payment (Stripe integration placeholder)
-  app.post("/api/payments/process", requireAuth, async (req: Request, res: Response) => {
+  // Create Stripe Payment Intent
+  app.post("/api/create-payment-intent", requireAuth, async (req: Request, res: Response) => {
     try {
-      const { orderId, paymentMethod } = req.body;
+      const { orderId } = req.body;
 
       const order = await storage.getOrder(orderId);
       if (!order || order.userId !== req.session.userId) {
@@ -475,32 +494,79 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Payment not found" });
       }
 
-      // TODO: Integrate with Stripe API
-      // For now, simulate successful payment
-      const updatedPayment = await storage.updatePayment(payment.id, {
-        status: "completed",
-        stripePaymentIntentId: `pi_${Date.now()}`,
+      // Create payment intent with Stripe
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: Math.round(parseFloat(payment.amount) * 100), // Convert to cents
+        currency: "usd",
+        metadata: {
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+        },
       });
 
-      await storage.updateOrder(orderId, { status: "completed" });
+      // Update payment with Stripe payment intent ID
+      await storage.updatePayment(payment.id, {
+        stripePaymentIntentId: paymentIntent.id,
+      });
 
-      // Update product stock
-      const orderItems = await storage.getOrderItems(orderId);
-      for (const item of orderItems) {
-        const product = await storage.getProduct(item.productId);
-        if (product) {
-          await storage.updateProduct(product.id, {
-            stock: product.stock - parseInt(item.quantity),
-          });
-        }
+      res.json({ clientSecret: paymentIntent.client_secret });
+    } catch (error: any) {
+      console.error("Create payment intent error:", error);
+      res.status(500).json({ error: "Failed to create payment intent: " + error.message });
+    }
+  });
+
+  // Confirm payment and complete order
+  app.post("/api/payments/confirm", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { orderId } = req.body;
+
+      const order = await storage.getOrder(orderId);
+      if (!order || order.userId !== req.session.userId) {
+        return res.status(404).json({ error: "Order not found" });
       }
 
-      // TODO: Send order confirmation email
+      const payment = await storage.getPayment(orderId);
+      if (!payment || !payment.stripePaymentIntentId) {
+        return res.status(404).json({ error: "Payment not found" });
+      }
 
-      res.json({ message: "Payment processed successfully", payment: updatedPayment });
-    } catch (error) {
-      console.error("Process payment error:", error);
-      res.status(500).json({ error: "Failed to process payment" });
+      // Retrieve payment intent from Stripe to verify status
+      const paymentIntent = await stripe.paymentIntents.retrieve(payment.stripePaymentIntentId);
+
+      if (paymentIntent.status === "succeeded") {
+        // Update payment status
+        await storage.updatePayment(payment.id, {
+          status: "completed",
+        });
+
+        // Update order status
+        await storage.updateOrder(orderId, { status: "completed" });
+
+        // Update product stock
+        const orderItems = await storage.getOrderItems(orderId);
+        for (const item of orderItems) {
+          const product = await storage.getProduct(item.productId);
+          if (product) {
+            await storage.updateProduct(product.id, {
+              stock: product.stock - parseInt(item.quantity),
+            });
+          }
+        }
+
+        res.json({ 
+          message: "Payment successful", 
+          order: { ...order, status: "completed" }, 
+          payment: { ...payment, status: "completed" }
+        });
+      } else {
+        await storage.updatePayment(payment.id, { status: "failed" });
+        await storage.updateOrder(orderId, { status: "failed" });
+        res.status(400).json({ error: "Payment was not successful" });
+      }
+    } catch (error: any) {
+      console.error("Confirm payment error:", error);
+      res.status(500).json({ error: "Failed to confirm payment: " + error.message });
     }
   });
 
@@ -548,13 +614,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ==================== TRENDING & RECOMMENDATIONS ====================
   
-  // Get trending products
+  // Get trending products (based on order frequency)
   app.get("/api/products/trending", async (req: Request, res: Response) => {
     try {
-      // TODO: Calculate based on order frequency
-      // For now, return top 4 products by stock (placeholder)
       const products = await storage.getAllProducts();
-      const trending = products.sort((a, b) => b.stock - a.stock).slice(0, 4);
+      const allOrderItems = await db.select().from(orderItems);
+      
+      // Count frequency of each product in orders
+      const productFrequency = new Map<string, number>();
+      for (const item of allOrderItems) {
+        const count = productFrequency.get(item.productId) || 0;
+        productFrequency.set(item.productId, count + 1);
+      }
+
+      // Sort products by frequency
+      const trending = products
+        .map(product => ({
+          ...product,
+          orderCount: productFrequency.get(product.id) || 0,
+        }))
+        .sort((a, b) => b.orderCount - a.orderCount)
+        .slice(0, 4);
+
       res.json(trending);
     } catch (error) {
       console.error("Get trending products error:", error);
@@ -562,17 +643,70 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get AI recommendations
+  // Get AI-powered product recommendations
   app.get("/api/products/recommended", requireAuth, async (req: Request, res: Response) => {
     try {
-      // TODO: Use OpenAI to generate recommendations based on order history
-      // For now, return random products (placeholder)
-      const products = await storage.getAllProducts();
-      const recommended = products.slice(0, 4);
+      const userId = req.session.userId!;
+      
+      // Get user's order history
+      const orders = await storage.getUserOrders(userId);
+      const allProducts = await storage.getAllProducts();
+      
+      if (orders.length === 0) {
+        // No order history, return popular products
+        const trending = allProducts.slice(0, 4);
+        return res.json(trending);
+      }
+
+      // Get all order items for user's orders
+      const userOrderItems = [];
+      for (const order of orders) {
+        const items = await storage.getOrderItems(order.id);
+        userOrderItems.push(...items);
+      }
+
+      // Build purchase history for AI
+      const purchaseHistory = userOrderItems.map(item => item.productName).join(", ");
+      const availableProducts = allProducts.map(p => p.name).join(", ");
+
+      // Use OpenAI to generate recommendations
+      const completion = await openai.chat.completions.create({
+        model: "gpt-5",
+        messages: [
+          {
+            role: "system",
+            content: `You are a smart shopping assistant. Based on a user's purchase history, recommend 4 products they might like from the available products list. Return only product names as a JSON array.`,
+          },
+          {
+            role: "user",
+            content: `Purchase History: ${purchaseHistory}\n\nAvailable Products: ${availableProducts}\n\nRecommend 4 products as JSON array of product names.`,
+          },
+        ],
+        response_format: { type: "json_object" },
+      });
+
+      const aiResponse = JSON.parse(completion.choices[0].message.content || "{}");
+      const recommendedNames = aiResponse.recommendations || [];
+
+      // Match recommended names to actual products
+      const recommended = allProducts
+        .filter(p => recommendedNames.includes(p.name))
+        .slice(0, 4);
+
+      // If AI didn't return enough, fill with popular products
+      if (recommended.length < 4) {
+        const remaining = allProducts
+          .filter(p => !recommendedNames.includes(p.name))
+          .slice(0, 4 - recommended.length);
+        recommended.push(...remaining);
+      }
+
       res.json(recommended);
     } catch (error) {
       console.error("Get recommended products error:", error);
-      res.status(500).json({ error: "Failed to get recommended products" });
+      // Fallback to random products on error
+      const products = await storage.getAllProducts();
+      res.json(products.slice(0, 4));
     }
   });
 
